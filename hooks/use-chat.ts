@@ -102,7 +102,7 @@ export function useChat() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            conversation_id: currentConversation.id,
+            conversation_id: currentConversation?.id,
             content,
             sender_type: "user",
             sender_name: userName,

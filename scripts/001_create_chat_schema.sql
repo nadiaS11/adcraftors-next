@@ -1,3 +1,11 @@
+-- Drop existing tables if they exist (to restart cleanly)
+DROP TABLE IF EXISTS public.messages CASCADE;
+DROP TABLE IF EXISTS public.conversations CASCADE;
+DROP TABLE IF EXISTS public.agents CASCADE;
+
+-- Drop function if exists
+DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;
+
 -- Create chat conversations table
 CREATE TABLE IF NOT EXISTS public.conversations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -37,10 +45,21 @@ CREATE POLICY "Anyone can create conversations" ON public.conversations
   FOR INSERT WITH CHECK (true);
 
 CREATE POLICY "Users can view their own conversations" ON public.conversations
-  FOR SELECT USING (user_email = current_setting('request.jwt.claims', true)::json->>'email' OR auth.uid() IN (SELECT id FROM public.agents));
+  FOR SELECT USING (
+    user_email = current_setting('request.jwt.claims', true)::json->>'email' 
+    OR EXISTS (
+      SELECT 1 FROM public.agents 
+      WHERE agents.id = auth.uid() AND agents.is_active = true
+    )
+  );
 
 CREATE POLICY "Agents can update conversations" ON public.conversations
-  FOR UPDATE USING (auth.uid() IN (SELECT id FROM public.agents));
+  FOR UPDATE USING (
+    EXISTS (
+      SELECT 1 FROM public.agents 
+      WHERE agents.id = auth.uid() AND agents.is_active = true
+    )
+  );
 
 -- RLS Policies for messages
 CREATE POLICY "Anyone can create messages" ON public.messages
@@ -51,13 +70,16 @@ CREATE POLICY "Users can view messages in their conversations" ON public.message
     conversation_id IN (
       SELECT id FROM public.conversations 
       WHERE user_email = current_setting('request.jwt.claims', true)::json->>'email'
-      OR auth.uid() IN (SELECT id FROM public.agents)
+    )
+    OR EXISTS (
+      SELECT 1 FROM public.agents 
+      WHERE agents.id = auth.uid() AND agents.is_active = true
     )
   );
 
--- RLS Policies for agents
-CREATE POLICY "Agents can view all agents" ON public.agents
-  FOR SELECT USING (auth.uid() IN (SELECT id FROM public.agents));
+-- RLS Policies for agents (FIXED - no more infinite recursion)
+CREATE POLICY "Authenticated users can view active agents" ON public.agents
+  FOR SELECT USING (auth.uid() IS NOT NULL AND is_active = true);
 
 CREATE POLICY "Agents can insert themselves" ON public.agents
   FOR INSERT WITH CHECK (auth.uid() = id);
@@ -71,6 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_conversations_status ON public.conversations(stat
 CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON public.conversations(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON public.messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_messages_created_at ON public.messages(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agents_is_active ON public.agents(is_active);
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
